@@ -22,53 +22,89 @@ sudo usermod -aG docker $USER
 sudo systemctl enable docker
 # Restart docker to make sure we get the latest version of the daemon if there is an upgrade
 sudo service docker restart
-sudo curl -L https://github.com/docker/compose/releases/download/1.23.2/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-docker-compose --version
 
-curl -L https://gist.githubusercontent.com/ilude/e2342829a97c3c3d3da5f9c73976c4ec/raw/33838df898b305c796ca2818acc552ca407ecc2a/gitconfig -o $HOME/.gitconfig
-sudo curl -L https://gist.githubusercontent.com/ilude/e2342829a97c3c3d3da5f9c73976c4ec/raw/33838df898b305c796ca2818acc552ca407ecc2a/git-prompt.sh -o /etc/profile.d/git-prompt.sh
-sudo chmod +x /etc/profile.d/git-prompt.sh
-
-mkdir $HOME/.ssh
-curl -L https://gist.githubusercontent.com/ilude/e2342829a97c3c3d3da5f9c73976c4ec/raw/33838df898b305c796ca2818acc552ca407ecc2a/authorized_keys -o $HOME/.ssh/authorized_keys
+mkdir -p $HOME/.ssh
+curl -sSL https://gist.githubusercontent.com/ilude/e2342829a97c3c3d3da5f9c73976c4ec/raw/e858de0efb18a01795b9722796b6126df9696ce1/authorized_keys_limited -o $HOME/.ssh/authorized_keys
 ssh-keyscan -H github.com >> $HOME/.ssh/known_hosts
 ssh-keyscan -H bitbucket.org >> $HOME/.ssh/known_hosts
 chmod 700 $HOME/.ssh
 chmod 600 $HOME/.ssh/*
 
-
 sudo mkdir -p /apps
 sudo chown $USER:$USER /apps
 
 # tone down the adware and login noise
-sudo chmod -x 50-motd-news
-sudo chmod -x 80-livepatch
-sudo chmod -x 10-help-text
+sudo chmod -x 50-motd-news > /dev/null 2>&1
+sudo chmod -x 80-livepatch > /dev/null 2>&1
+sudo chmod -x 10-help-text > /dev/null 2>&1
 
 cat << EOF >> $HOME/.profile
-# set PATH so it includes user's private bin directories
-PATH="$HOME/bin:$HOME/.local/bin:$PATH"
-export USERNAME=production
-export RAILS_ENV=production
-alias dc=docker-compose
 alias l='ls --color -lha --group-directories-first'
 EOF
 
 source $HOME/.profile
 
-echo "Fetching Consul..."
-curl -sSL https://releases.hashicorp.com/consul/${CONSUL_VERSION}/consul_${CONSUL_VERSION}_linux_amd64.zip -o /tmp/consul.zip
+sudo docker pull consul
 
-echo "Installing Consul..."
-unzip /tmp/consul.zip
-sudo chown root:root consul
-sudo mv consul /usr/local/bin/
-consul --version
+FILE=/vagrant/consul-server.ip
+if [ ! -e "$FILE" ]; then
+  ip -h route get 1 | awk '{print $7;exit}' > $FILE
+fi
+export CONSUL_SERVER=$(cat $FILE)
+export BIND_ADDR=$(ip -h route get 1 | awk '{print $7;exit}')
 
-consul -autocomplete-install
-complete -C /usr/local/bin/consul consul
+FILE=/vagrant/consul-server.key
+if [ ! -e "$FILE" ]; then
+ sudo docker run --rm -it consul consul keygen | awk '{print $1;exit}' > $FILE
+fi
+export CONSUL_KEY=$(cat $FILE)
 
-sudo useradd --system --home /etc/consul.d --shell /bin/false consul
-sudo mkdir --parents /opt/consul
-sudo chown --recursive consul:consul /opt/consul
+mkdir -p /apps/consul/etc
+
+(
+cat <<-EOF
+datacenter = "dc1"
+encrypt = "$CONSUL_KEY"
+bind_addr = "$BIND_ADDR"
+retry_join = ["$CONSUL_SERVER"]
+performance {
+  raft_multiplier = 1
+}
+EOF
+) | sudo tee /apps/consul/etc/consul.hcl
+
+(
+cat <<-EOF
+server = true
+bootstrap_expect = 3
+ui = true
+EOF
+) | sudo tee /apps/consul/etc/server.hcl
+
+(
+cat <<-EOF
+[Unit]
+Description=Docker Container %I
+Requires=docker.service
+After=docker.service
+
+[Service]
+TimeoutStartSec=0
+Restart=always
+ExecStop=/usr/bin/docker stop -t 2 %i
+ExecStart=/usr/bin/docker run \
+ --rm \
+ --net=host \
+ --name=consul \
+ -v /apps/consul/etc/:/consul/config/ \
+ -v /apps/consul/data/:/consul/data/ \
+ consul agent -server
+
+[Install]
+WantedBy=default.target
+EOF
+) | sudo tee /etc/systemd/system/docker-container@consul.service
+
+sudo systemctl enable docker-container@consul
+sudo systemctl start docker-container@consul
+sudo systemctl status docker-container@consul
