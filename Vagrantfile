@@ -2,7 +2,7 @@ Dir[File.expand_path("#{File.dirname(__FILE__)}/plugins/*.rb")].each {|file| req
 env = UserEnv.load
 
 Vagrant.configure(2) do |config|
-  config.vm.box = "generic/ubuntu1804"
+  config.vm.box = "hashicorp/bionic64"
   config.vm.network :public_network, bridge: env['switch_name']
   config.vm.synced_folder ".", "/vagrant", type: "smb", smb_username: env['smb_username'], smb_password: env['smb_password']
   config.ssh.username = "vagrant"
@@ -14,6 +14,7 @@ Vagrant.configure(2) do |config|
   end
 
   config.trigger.before :up do |trigger|
+    trigger.info = "cleaning up consul-server files..."
     ['consul-server.ip', 'consul-server.key'].each do |file|
       File.delete(file) if File.exist?(file)
     end

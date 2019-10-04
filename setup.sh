@@ -1,12 +1,15 @@
 #! /bin/bash
 
+set -ex
+
+DEBIAN_FRONTEND=noninteractive
+
 # Update apt and get dependencies
 sudo apt-get update
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y unzip curl vim apt-transport-https ca-certificates software-properties-common
+sudo apt-get dist-upgrade -y
+sudo apt-get install -y unzip curl apt-transport-https ca-certificates software-properties-common
 
-CONSUL_VERSION=1.6.1
-
-
+# start docker setup
 echo "Installing Docker..."
 if [[ -f /etc/apt/sources.list.d/docker.list ]]; then
     echo "Docker repository already installed; Skipping"
@@ -15,10 +18,11 @@ else
     sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
     sudo apt-get update
 fi
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce
+sudo apt-get install -y docker-ce
 
 # Make sure we can actually use docker as the vagrant user
 sudo usermod -aG docker $USER
+sudo systemctl daemon-reload
 sudo systemctl enable docker
 # Restart docker to make sure we get the latest version of the daemon if there is an upgrade
 sudo service docker restart
@@ -34,9 +38,9 @@ sudo mkdir -p /apps
 sudo chown $USER:$USER /apps
 
 # tone down the adware and login noise
-sudo chmod -x 50-motd-news > /dev/null 2>&1
-sudo chmod -x 80-livepatch > /dev/null 2>&1
-sudo chmod -x 10-help-text > /dev/null 2>&1
+sudo chmod -x 50-motd-news > /dev/null 2>&1 || true
+sudo chmod -x 80-livepatch > /dev/null 2>&1 || true
+sudo chmod -x 10-help-text > /dev/null 2>&1 || true
 
 cat << EOF >> $HOME/.profile
 alias l='ls --color -lha --group-directories-first'
@@ -66,6 +70,7 @@ cat <<-EOF
 datacenter = "dc1"
 encrypt = "$CONSUL_KEY"
 bind_addr = "$BIND_ADDR"
+client_addr = "$BIND_ADDR"
 retry_join = ["$CONSUL_SERVER"]
 performance {
   raft_multiplier = 1
@@ -98,13 +103,14 @@ ExecStart=/usr/bin/docker run \
  --name=consul \
  -v /apps/consul/etc/:/consul/config/ \
  -v /apps/consul/data/:/consul/data/ \
- consul agent -server
+ consul agent -server -ui 
 
 [Install]
 WantedBy=default.target
 EOF
 ) | sudo tee /etc/systemd/system/docker-container@consul.service
 
+sudo systemctl daemon-reload
 sudo systemctl enable docker-container@consul
 sudo systemctl start docker-container@consul
 sudo systemctl status docker-container@consul
